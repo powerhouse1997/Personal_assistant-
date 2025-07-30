@@ -1,4 +1,4 @@
-+# Personal Assistant Telegram Bot
+# Personal Assistant Telegram Bot
 +
 +A comprehensive personal assistant Telegram bot with multiple features to help you stay organized, productive, and informed.
 +
