@@ -4,8 +4,9 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 import asyncio
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from telegram.ext import ApplicationBuilder
+import random  # Added missing import
 
 # Enable logging
 logging.basicConfig(
@@ -19,6 +20,9 @@ notes = {}
 
 # FastAPI app for webhook
 app = FastAPI()
+
+# Global application instance
+application = None
 
 # Command: /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -125,7 +129,7 @@ async def delete_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except ValueError:
         await update.message.reply_text("Please provide a valid note index.")
 
-# Command: /ask (AI feature)
+# Command: /ask
 async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
     if not args:
@@ -133,7 +137,6 @@ async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     question = " ".join(args)
-    # Simulate AI response (mocked for simplicity, as no external AI API is integrated)
     responses = [
         f"Interesting question about '{question}'! Here's a quick thought: it depends on the context, but generally, I'd suggest exploring more details.",
         f"Hmm, regarding '{question}', I'd say it's a complex topic, but a good starting point is to break it down into smaller parts.",
@@ -157,20 +160,30 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # Error handler
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"Update {update} caused error {context.error}")
-    await update.message.reply_text("An error occurred. Please try again.")
+    if update and update.message:
+        await update.message.reply_text("An error occurred. Please try again.")
 
 # Webhook endpoint
 @app.post("/webhook")
-async def webhook(request: Request) -> None:
-    update = Update.de_json(await request.json(), bot)
-    await application.process_update(update)
+async def webhook(request: Request) -> dict:
+    try:
+        update_data = await request.json()
+        update = Update.de_json(update_data, application.bot)
+        if update:
+            await application.process_update(update)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid update data")
 
-# Initialize bot and application
-bot = None
-application = None
+async def set_webhook() -> None:
+    webhook_url = os.getenv("WEBHOOK_URL")
+    if not webhook_url:
+        raise ValueError("WEBHOOK_URL environment variable not set")
+    await application.bot.set_webhook(f"{webhook_url}/webhook")
 
 def main() -> None:
-    global bot, application
+    global application
     # Get environment variables
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -190,6 +203,10 @@ def main() -> None:
     application.add_handler(CommandHandler("ask", ask_ai))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     application.add_error_handler(error_handler)
+
+    # Initialize application and set webhook
+    application.run_polling = lambda: None  # Disable polling, as we're using webhook
+    asyncio.run(set_webhook())
 
 if __name__ == "__main__":
     import uvicorn
