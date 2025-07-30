@@ -100,12 +100,12 @@
 
 2. Set up your environment variables:
    - `TELEGRAM_TOKEN`: Your Telegram bot token from BotFather
-   - `OPENAI_API_KEY`: Your OpenAI API key
+   - `PERPLEXITY_API_KEY`: Your Perplexity API key
 
    You can export them in your shell:
    ```bash
    export TELEGRAM_TOKEN=your_telegram_token
-   export OPENAI_API_KEY=your_openai_api_key
+   export PERPLEXITY_API_KEY=your_perplexity_api_key
    ```
 
 3. Run the bot:
@@ -114,7 +114,7 @@
    ```
 
 ### Features
-- Replies to any message with an AI-generated response using OpenAI GPT-3.5/4.
+- Replies to any message with an AI-generated response using Perplexity AI.
 
 ### Extending
 You can add more features by editing `bot.py` and adding new command or message handlers.

@@ -11,18 +11,23 @@ logging.basicConfig(
 )
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'YOUR_OPENAI_API_KEY')
-openai.api_key = OPENAI_API_KEY
+PERPLEXITY_API_KEY = os.getenv('PERPLEXITY_API_KEY', 'YOUR_PERPLEXITY_API_KEY')
+
+# Configure OpenAI client to use Perplexity API
+openai.api_key = PERPLEXITY_API_KEY
+openai.api_base = "https://api.perplexity.ai"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('Hello! I am your AI assistant. Ask me anything!')
+    await update.message.reply_text('Hello! I am your AI assistant powered by Perplexity. Ask me anything!')
 
 async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     try:
+        # Use Perplexity's chat completion
         response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": user_message}]
+            model="llama-3.1-sonar-small-128k-online",
+            messages=[{"role": "user", "content": user_message}],
+            max_tokens=1000
         )
         ai_message = response.choices[0].message.content.strip()
     except Exception as e:
