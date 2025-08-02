@@ -2,6 +2,7 @@
 import os
 import telebot
 import google.generativeai as genai
+from features.web_search import search as web_search_func
 
 # It's best practice to get the token from an environment variable
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -32,6 +33,35 @@ def ask_gemini(message):
         bot.reply_to(message, response.text)
     except Exception as e:
         bot.reply_to(message, f"An error occurred: {e}")
+
+@bot.message_handler(commands=['search'])
+def search_tavily(message):
+    query = message.text.split('/search', 1)[1].strip()
+    if not query:
+        bot.reply_to(message, "Please provide a search query after the /search command.")
+        return
+    try:
+        results = web_search_func(query)
+        if isinstance(results, str): # Error case
+            bot.reply_to(message, results)
+            return
+
+        response_text = ""
+        for result in results[:5]: # Show top 5 results
+            response_text += f"Title: {result['title']}\n"
+            response_text += f"URL: {result['url']}\n"
+            response_text += f"Snippet: {result['content']}\n\n"
+
+        if not response_text:
+            response_text = "No results found."
+
+        if len(response_text) > 4096:
+            response_text = response_text[:4090] + "..."
+
+        bot.reply_to(message, response_text)
+
+    except Exception as e:
+        bot.reply_to(message, f"An error occurred during the search: {e}")
 
 @bot.message_handler(func=lambda msg: True)
 def echo_all(message):
