@@ -1,4 +1,4 @@
-# telegram_video_bot.py
+# bot.py
 
 import logging
 import requests
@@ -8,6 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import json
 import os
+import asyncio
 
 # Enable logging
 logging.basicConfig(
@@ -16,7 +17,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-# The token is now loaded from an environment variable for security.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DATA_FILE = "bot_data.json"
 
@@ -33,9 +33,6 @@ def load_data():
 
 def save_data(data):
     """Saves data to a JSON file."""
-    # Note: Railway's filesystem is ephemeral. For persistent data,
-    # you should use a database or Railway's volume feature.
-    # This file-based storage will reset on each deployment.
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=4)
 
@@ -189,7 +186,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         await update.message.reply_text("Please send me a valid URL or use a command.")
 
-def main() -> None:
+async def main() -> None:
     """Start the bot and the scheduler."""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN environment variable not set!")
@@ -209,7 +206,7 @@ def main() -> None:
     scheduler.start()
 
     logger.info("Starting bot...")
-    application.run_polling()
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
