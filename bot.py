@@ -181,7 +181,7 @@ async def get_recent_videos(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         subscriptions = data.get("subscriptions", {}).get(chat_id, [])
         sent_videos = data.get("sent_videos", {})
         
-        recent_videos = []
+        found_video_links = []
         
         # Find all subscriptions for this chat that match the actress name
         matching_subs = [sub for sub in subscriptions if sub.get("filter", "").lower() == actress_name_query.lower()]
@@ -190,6 +190,25 @@ async def get_recent_videos(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.message.reply_text(f"You are not subscribed to '{actress_name_query}'. Use /subscribe first.")
             return
 
+        # --- START OF THE CORRECTED LOGIC ---
         for sub in matching_subs:
             url = sub.get("url")
-            if url in se
+            # Check if we have a record of sent videos for this subscription's URL
+            if url in sent_videos:
+                # If yes, add all video links from that URL to our list
+                found_video_links.extend(sent_videos[url])
+        
+        if found_video_links:
+            # Using dict.fromkeys preserves order and removes duplicates efficiently
+            unique_links = list(dict.fromkeys(found_video_links))
+            message = f"Recently found videos for '{actress_name_query}':\n\n"
+            message += "\n".join(unique_links)
+            await update.message.reply_text(message)
+        else:
+            # This handles the case where the user is subscribed, but the bot hasn't found any videos yet.
+            await update.message.reply_text(f"You are subscribed to '{actress_name_query}', but no videos have been found and sent yet.")
+        # --- END OF THE CORRECTED LOGIC ---
+
+    except Exception as e:
+        logger.error(f"Error in /recent command: {e}")
+        await update.message.reply_text("An unexpected error occurred while fetching recent videos.")
