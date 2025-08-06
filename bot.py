@@ -100,7 +100,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Commands:\n"
         "/subscribe <URL> <ActressName> - Get updates for an actress from a URL.\n"
         "/unsubscribe <URL> - Stop getting updates for a URL.\n"
-        "/list - See your current subscriptions.\n\n"
+        "/list - See your current subscriptions.\n"
+        "/recent <ActressName> - Get recent videos for a subscribed actress.\n\n"
         "You can also send me a URL directly to check for videos once (without filter)."
     )
 
@@ -167,70 +168,28 @@ async def list_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await update.message.reply_text("You have no active subscriptions.")
 
+async def get_recent_videos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a list of recently found videos for a subscribed actress."""
+    chat_id = str(update.effective_chat.id)
+    try:
+        actress_name_query = " ".join(context.args)
+        if not actress_name_query:
+            await update.message.reply_text("Usage: /recent <ActressName>")
+            return
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles non-command messages, expecting a URL for a one-time check."""
-    message_text = update.message.text
-    if message_text.startswith('http://') or message_text.startswith('https://'):
-        await update.message.reply_text("Processing your link (one-time check, no filter)...")
-        video_links = extract_video_links(message_text)
-
-        if video_links:
-            response_message = "Here are the video links I found:\n\n"
-            for link in video_links:
-                response_message += f"- {link}\n"
-        else:
-            response_message = "Sorry, I couldn't find any direct video links on that page."
-
-        await update.message.reply_text(response_message)
-    else:
-        await update.message.reply_text("Please send me a valid URL or use a command.")
-
-def main() -> None:
-    """Start the bot and the scheduler."""
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN environment variable not set!")
-        return
+        data = load_data()
+        subscriptions = data.get("subscriptions", {}).get(chat_id, [])
+        sent_videos = data.get("sent_videos", {})
         
-    # Create the scheduler
-    scheduler = AsyncIOScheduler()
+        recent_videos = []
+        
+        # Find all subscriptions for this chat that match the actress name
+        matching_subs = [sub for sub in subscriptions if sub.get("filter", "").lower() == actress_name_query.lower()]
 
-    async def post_init(app: Application) -> None:
-        """
-        This function will be called by the Application after it has been initialized.
-        It's the perfect place to schedule our job.
-        """
-        scheduler.add_job(check_for_new_videos, "interval", hours=1, args=[app.bot])
-        scheduler.start()
+        if not matching_subs:
+            await update.message.reply_text(f"You are not subscribed to '{actress_name_query}'. Use /subscribe first.")
+            return
 
-    async def post_shutdown(app: Application) -> None:
-        """
-        This function will be called by the Application before it shuts down.
-        It's the perfect place to shut down our scheduler.
-        """
-        await scheduler.shutdown()
-
-    # Build the application with the lifecycle hooks
-    application = (
-        Application.builder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .post_init(post_init)
-        .post_shutdown(post_shutdown)
-        .build()
-    )
-
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("subscribe", subscribe))
-    application.add_handler(CommandHandler("unsubscribe", unsubscribe))
-    application.add_handler(CommandHandler("list", list_subscriptions))
-
-    # Add message handler
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Run the bot until the user presses Ctrl-C
-    logger.info("Starting bot...")
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
+        for sub in matching_subs:
+            url = sub.get("url")
+            if url in se
