@@ -3,7 +3,7 @@
 import logging
 import requests
 from bs4 import BeautifulSoup
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import json
@@ -67,7 +67,7 @@ def extract_video_links(url: str, filter_keyword: str = None) -> list[str]:
     return video_links
 
 # --- Scheduled Job ---
-async def check_for_new_videos(context: ContextTypes.DEFAULT_TYPE):
+async def check_for_new_videos(bot: Bot):
     """Checks for new videos based on subscriptions and filters."""
     data = load_data()
     subscriptions = data.get("subscriptions", {})
@@ -87,7 +87,7 @@ async def check_for_new_videos(context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"Found {len(new_videos)} new videos on {url} for chat {chat_id}")
                 for video_link in new_videos:
                     message = f"New video of '{actress_name}' found on {url}:\n{video_link}"
-                    await context.bot.send_message(chat_id=chat_id, text=message)
+                    await bot.send_message(chat_id=chat_id, text=message)
                     sent_videos_for_url.append(video_link)
     save_data(data)
 
@@ -186,27 +186,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         await update.message.reply_text("Please send me a valid URL or use a command.")
 
-async def main() -> None:
+def main() -> None:
     """Start the bot and the scheduler."""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN environment variable not set!")
         return
         
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # Create the scheduler
+    scheduler = AsyncIOScheduler()
 
+    async def post_init(app: Application) -> None:
+        """
+        This function will be called by the Application after it has been initialized.
+        It's the perfect place to schedule our job.
+        """
+        scheduler.add_job(check_for_new_videos, "interval", hours=1, args=[app.bot])
+        scheduler.start()
+
+    async def post_shutdown(app: Application) -> None:
+        """
+        This function will be called by the Application before it shuts down.
+        It's the perfect place to shut down our scheduler.
+        """
+        await scheduler.shutdown()
+
+    # Build the application with the lifecycle hooks
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+
+    # Add command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("subscribe", subscribe))
     application.add_handler(CommandHandler("unsubscribe", unsubscribe))
     application.add_handler(CommandHandler("list", list_subscriptions))
 
+    # Add message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_for_new_videos, 'interval', hours=1, args=[application])
-    scheduler.start()
-
+    # Run the bot until the user presses Ctrl-C
     logger.info("Starting bot...")
-    await application.run_polling()
+    application.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
