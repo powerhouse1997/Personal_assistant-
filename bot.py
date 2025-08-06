@@ -28,6 +28,7 @@ def load_data():
             try:
                 return json.load(f)
             except json.JSONDecodeError:
+                # If file is corrupt or empty, start fresh
                 return {"subscriptions": {}, "sent_videos": {}}
     return {"subscriptions": {}, "sent_videos": {}}
 
@@ -44,16 +45,19 @@ def extract_video_links(url: str, filter_keyword: str = None) -> list[str]:
     """
     video_links = []
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
+        # Add a user-agent header to look like a normal browser
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, timeout=15, headers=headers)
+        response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
         if filter_keyword:
             body_text = soup.body.get_text().lower()
             if filter_keyword.lower() not in body_text:
-                return []
+                return [] # Return empty if filter keyword is not on the page
 
+        # Find all video tags and their sources
         for video_tag in soup.find_all('video'):
             if video_tag.has_attr('src'):
                 video_links.append(video_tag['src'])
@@ -64,22 +68,25 @@ def extract_video_links(url: str, filter_keyword: str = None) -> list[str]:
         logger.error(f"Error fetching URL {url}: {e}")
     except Exception as e:
         logger.error(f"An error occurred during scraping: {e}")
-    return video_links
+    return list(dict.fromkeys(video_links)) # Return unique links
 
 # --- Scheduled Job ---
-async def check_for_new_videos(bot: Bot):
+async def check_for_new_videos(context: ContextTypes.DEFAULT_TYPE):
     """Checks for new videos based on subscriptions and filters."""
+    bot = context.bot
     data = load_data()
     subscriptions = data.get("subscriptions", {})
     
+    # Iterate over a copy of items to allow modification during loop
     for chat_id, subs in list(subscriptions.items()):
-        for sub_info in subs:
+        for sub_info in list(subs):
             url = sub_info.get("url")
             actress_name = sub_info.get("filter")
             
             logger.info(f"Checking {url} for new videos of '{actress_name}' for chat {chat_id}")
             latest_videos = extract_video_links(url, filter_keyword=actress_name)
             
+            # Ensure the structure for sent videos exists
             sent_videos_for_url = data.setdefault("sent_videos", {}).setdefault(url, [])
             new_videos = [video for video in latest_videos if video not in sent_videos_for_url]
 
@@ -87,10 +94,12 @@ async def check_for_new_videos(bot: Bot):
                 logger.info(f"Found {len(new_videos)} new videos on {url} for chat {chat_id}")
                 for video_link in new_videos:
                     message = f"New video of '{actress_name}' found on {url}:\n{video_link}"
-                    await bot.send_message(chat_id=chat_id, text=message)
-                    sent_videos_for_url.append(video_link)
+                    try:
+                        await bot.send_message(chat_id=chat_id, text=message)
+                        sent_videos_for_url.append(video_link)
+                    except Exception as e:
+                        logger.error(f"Failed to send message to chat {chat_id}: {e}")
     save_data(data)
-
 
 # --- Telegram Bot Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -109,15 +118,15 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Subscribes a chat to a URL with an actress name filter."""
     chat_id = str(update.effective_chat.id)
     try:
+        if len(context.args) < 2:
+            await update.message.reply_text("Usage: /subscribe <URL> <ActressName>")
+            return
+
         url = context.args[0]
         actress_name = " ".join(context.args[1:])
         
-        if not actress_name:
-            await update.message.reply_text("Please provide an actress name. Usage: /subscribe <URL> <ActressName>")
-            return
-
         if not (url.startswith('http://') or url.startswith('https://')):
-            await update.message.reply_text("Please provide a valid URL.")
+            await update.message.reply_text("Please provide a valid URL starting with http:// or https://")
             return
 
         data = load_data()
@@ -135,7 +144,7 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Usage: /subscribe <URL> <ActressName>")
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Unsubscribes a chat from a URL."""
+    """Unsubscribes a chat from all filters associated with a URL."""
     chat_id = str(update.effective_chat.id)
     try:
         url_to_remove = context.args[0]
@@ -146,14 +155,14 @@ async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             
             if len(data["subscriptions"][chat_id]) < initial_len:
                 if not data["subscriptions"][chat_id]:
-                    del data["subscriptions"][chat_id]
+                    del data["subscriptions"][chat_id] # Clean up empty list
                 save_data(data)
                 await update.message.reply_text(f"You have unsubscribed from all filters on {url_to_remove}")
             else:
-                await update.message.reply_text("You are not subscribed to this URL.")
+                await update.message.reply_text("You were not subscribed to this URL.")
         else:
             await update.message.reply_text("You have no subscriptions.")
-    except (IndexError, ValueError):
+    except IndexError:
         await update.message.reply_text("Usage: /unsubscribe <URL>")
 
 async def list_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -183,32 +192,75 @@ async def get_recent_videos(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         found_video_links = []
         
-        # Find all subscriptions for this chat that match the actress name
         matching_subs = [sub for sub in subscriptions if sub.get("filter", "").lower() == actress_name_query.lower()]
 
         if not matching_subs:
             await update.message.reply_text(f"You are not subscribed to '{actress_name_query}'. Use /subscribe first.")
             return
 
-        # --- START OF THE CORRECTED LOGIC ---
         for sub in matching_subs:
             url = sub.get("url")
-            # Check if we have a record of sent videos for this subscription's URL
             if url in sent_videos:
-                # If yes, add all video links from that URL to our list
                 found_video_links.extend(sent_videos[url])
         
         if found_video_links:
-            # Using dict.fromkeys preserves order and removes duplicates efficiently
             unique_links = list(dict.fromkeys(found_video_links))
             message = f"Recently found videos for '{actress_name_query}':\n\n"
             message += "\n".join(unique_links)
             await update.message.reply_text(message)
         else:
-            # This handles the case where the user is subscribed, but the bot hasn't found any videos yet.
             await update.message.reply_text(f"You are subscribed to '{actress_name_query}', but no videos have been found and sent yet.")
-        # --- END OF THE CORRECTED LOGIC ---
 
     except Exception as e:
         logger.error(f"Error in /recent command: {e}")
         await update.message.reply_text("An unexpected error occurred while fetching recent videos.")
+
+async def handle_direct_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles a direct URL message for a one-time check."""
+    url = update.message.text
+    if not (url.startswith('http://') or url.startswith('https://')):
+        await update.message.reply_text("This doesn't look like a valid URL. Please send a full URL starting with http:// or https://")
+        return
+        
+    await update.message.reply_text(f"Checking {url} for videos...")
+    video_links = extract_video_links(url) # No filter keyword
+    
+    if video_links:
+        message = f"Found {len(video_links)} video(s) on {url}:\n\n"
+        message += "\n".join(video_links)
+    else:
+        message = f"Sorry, I couldn't find any direct video links on {url}."
+        
+    await update.message.reply_text(message)
+
+def main() -> None:
+    """Start the bot."""
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN environment variable not set!")
+        return
+
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # --- Scheduler Setup ---
+    scheduler = AsyncIOScheduler()
+    # Pass the application context to the job
+    scheduler.add_job(check_for_new_videos, 'interval', minutes=30, args=[application])
+    scheduler.start()
+
+    # --- Handlers ---
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("subscribe", subscribe))
+    application.add_handler(CommandHandler("unsubscribe", unsubscribe))
+    application.add_handler(CommandHandler("list", list_subscriptions))
+    application.add_handler(CommandHandler("recent", get_recent_videos))
+    
+    # This handler must be last
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_direct_url))
+
+    # Run the bot
+    logger.info("Bot is starting...")
+    application.run_polling()
+
+
+if __name__ == '__main__':
+    main()
