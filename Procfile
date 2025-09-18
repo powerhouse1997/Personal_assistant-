@@ -1,1 +1,1 @@
-worker: python zerochan_bot.py
+worker: python bot.py
