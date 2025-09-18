@@ -25,8 +25,7 @@ MAX_RETRIES = 2; RETRY_DELAY = 10; TELEGRAM_PHOTO_LIMIT = 10485760
 # --- URL Lists ---
 URLS_TO_SCRAPE = [
     "https://www.zerochan.net/",
-    "https://www.zerochan.net/Genshin+Impact",
-    "https://www.zerochan.net/Honkai%3A+Star+Rail"
+    "https://yande.re"
 ]
 MOBILE_WALLPAPER_URL = "https://www.zerochan.net/Mobile+Wallpaper"
 
