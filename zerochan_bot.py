@@ -1,4 +1,4 @@
-# --- FINAL SCRIPT - STABLE LOCKING & HEARTBEAT ---
+# --- FINAL SCRIPT - SELF-HEALING LOCK FILE ---
 
 import time
 import json
@@ -21,6 +21,7 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 JOB_INTERVAL = 300
 MAX_RETRIES = 2; RETRY_DELAY = 10; TELEGRAM_PHOTO_LIMIT = 10485760
+LOCK_FILE_TIMEOUT = 300 # 5 minutes
 
 # --- URL Lists ---
 URLS_TO_SCRAPE = ["https://www.zerochan.net/", "https://yande.re/post"]
@@ -34,30 +35,21 @@ sent_urls = deque(maxlen=100); last_known_images = {}; sent_wallpapers = set()
 driver_instance = None
 scraper_lock = asyncio.Lock()
 
-# --- Browser Management with Heartbeat ---
+# --- Browser, Memory, and Helper Functions (Unchanged) ---
 def get_driver():
     global driver_instance
-    # Heartbeat check
     if driver_instance:
-        try:
-            # A simple, non-blocking check to see if the browser is responsive
-            _ = driver_instance.current_url
-        except Exception as e:
-            print(f"Browser heartbeat failed: {e}. Restarting instance.")
-            quit_driver()
-    
+        try: _ = driver_instance.current_url
+        except Exception as e: print(f"Browser heartbeat failed: {e}. Restarting."); quit_driver()
     if driver_instance is None:
         print("Starting new browser instance...")
-        chrome_options = webdriver.ChromeOptions(); chrome_options.add_argument("--headless=new"); chrome_options.add_argument("--no-sandbox"); chrome_options.add_argument("--disable-dev-shm-usage"); chrome_options.add_argument("--disable-gpu"); chrome_options.add_argument("--disable-extensions"); chrome_options.add_argument("--disable-infobars"); chrome_options.add_argument("--disable-popup-blocking"); chrome_options.add_argument("--single-process"); chrome_options.add_argument("--blink-settings=imagesEnabled=false"); chrome_options.add_argument("--window-size=1280,1024")
+        chrome_options = webdriver.ChromeOptions(); chrome_options.add_argument("--headless=new"); chrome_options.add_argument("--no-sandbox"); chrome_options.add_argument("--disable-dev-shm-usage"); chrome_options.add_argument("--disable-gpu"); chrome_options.add_argument("--disable-extensions"); chrome_options.add_argument("--single-process"); chrome_options.add_argument("--blink-settings=imagesEnabled=false"); chrome_options.add_argument("--window-size=1280,1024")
         service = Service(executable_path="/usr/local/bin/chromedriver-linux64/chromedriver")
         driver_instance = webdriver.Chrome(service=service, options=chrome_options)
     return driver_instance
-
 def quit_driver():
     global driver_instance
     if driver_instance: print("Closing browser."); driver_instance.quit(); driver_instance = None
-
-# --- Memory & Helper Functions (Unchanged) ---
 def load_sent_wallpapers():
     try:
         with open(WALLPAPER_MEMORY_FILE, 'r') as f: return set(json.load(f))
@@ -82,8 +74,6 @@ async def send_file_with_retry(context: ContextTypes.DEFAULT_TYPE, chat_id, phot
             return True
         except TelegramError as e: print(f"Upload attempt {attempt + 1} failed: {e}"); await asyncio.sleep(RETRY_DELAY)
     return False
-
-# --- SIMPLIFIED, SYNCHRONOUS Scraping Functions ---
 def get_latest_image_from_zerochan(driver, url: str):
     try:
         driver.get(url); wait = WebDriverWait(driver, 45)
@@ -91,9 +81,7 @@ def get_latest_image_from_zerochan(driver, url: str):
         gallery = driver.find_element(By.ID, 'thumbs2'); first_item = gallery.find_element(By.TAG_NAME, 'li')
         page_link = first_item.find_element(By.TAG_NAME, 'a').get_attribute('href'); driver.get(page_link)
         return wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "a.preview"))).get_attribute('href')
-    except Exception as e:
-        print(f"Zerochan scraping failed for {url}. Error: {e}"); return None
-
+    except Exception as e: print(f"Zerochan scraping failed for {url}. Error: {e}"); return None
 def get_latest_image_from_yandere(driver, url: str):
     try:
         driver.get(url); wait = WebDriverWait(driver, 45)
@@ -101,23 +89,16 @@ def get_latest_image_from_yandere(driver, url: str):
         post_list = driver.find_element(By.ID, 'post-list-posts'); first_post = post_list.find_element(By.TAG_NAME, 'li')
         post_page_link = first_post.find_element(By.CLASS_NAME, 'thumb').get_attribute('href'); driver.get(post_page_link)
         return wait.until(EC.visibility_of_element_located((By.ID, 'highres'))).get_attribute('href')
-    except Exception as e:
-        print(f"Yande.re scraping failed for {url}. Error: {e}"); return None
-
-# --- Command Handlers ---
+    except Exception as e: print(f"Yande.re scraping failed for {url}. Error: {e}"); return None
 async def start(update, context):
     await update.message.reply_text('Hello! I monitor latest images automatically.\n\nUse `/wallpaper zerochan` or `/wallpaper yandere` to get 10 new wallpapers.')
-
-# --- MODIFIED: Wallpaper Command to use centralized lock ---
 async def get_wallpaper(update, context):
     source = "zerochan"
     if context.args and context.args[0].lower() in ['yandere', 'yande.re']: source = 'yandere'
     await update.message.reply_text(f'Browsing {source} for up to 10 new wallpapers, this may take a while...')
-    
-    async with scraper_lock: # Acquire lock for the entire operation
+    async with scraper_lock:
         try:
             driver = get_driver(); wait = WebDriverWait(driver, 45)
-            # ... (rest of the logic is identical, but now it has exclusive browser access)
             collected_images, newly_sent_ids, current_page, max_pages_to_check = [], [], 1, 10
             while len(collected_images) < 10 and current_page <= max_pages_to_check:
                 page_candidates=[];print(f"--- Searching page {current_page} of {source} ---")
@@ -151,46 +132,49 @@ async def get_wallpaper(update, context):
                 if send_success:await update.message.reply_text(f"Here are {len(collected_images)} new wallpapers from {source}!");sent_wallpapers.update(newly_sent_ids)
             if newly_sent_ids or len(collected_images) > 0:save_sent_wallpapers(sent_wallpapers)
             if len(collected_images) == 0:await update.message.reply_text("I browsed the first few pages but couldn't find any new wallpapers.")
-        except Exception as e:
-            print(f"Critical error in get_wallpaper: {e}");await update.message.reply_text("Sorry, a critical error occurred.");quit_driver()
-
-# --- MODIFIED: Automatic Job to use centralized lock ---
+        except Exception as e: print(f"Critical error in get_wallpaper: {e}");await update.message.reply_text("Sorry, an error occurred.");quit_driver()
 async def send_scheduled_image(context: ContextTypes.DEFAULT_TYPE):
     print("\n--- Running Scheduled Job ---")
-    async with scraper_lock: # Acquire lock for the entire job
+    async with scraper_lock:
         try:
-            driver = get_driver() # Get the single browser instance
+            driver = get_driver()
             for url in URLS_TO_SCRAPE:
                 try:
                     print(f"\nChecking URL: {url}"); latest_image_url = None
                     if "zerochan.net" in url: latest_image_url = get_latest_image_from_zerochan(driver, url)
                     elif "yande.re" in url: latest_image_url = get_latest_image_from_yandere(driver, url)
                     else: print(f"Warning: No scraper for {url}."); continue
-                    
                     if not latest_image_url: raise ValueError("Scraping returned no URL.")
                     last_seen_url = last_known_images.get(url)
                     if latest_image_url != last_seen_url and latest_image_url not in sent_urls:
                         print(f"NEW IMAGE FOUND on {url}!")
-                        # We release the lock before sending, as this can be slow and doesn't use the browser
-                        # This is an advanced optimization to let other commands run while we upload
                         asyncio.create_task(send_and_update_memory(context, latest_image_url, url))
                     else: print("No new image found.")
                     time.sleep(3)
                 except Exception as e: print(f"Job failed for URL: {url}. Reason: {e}. MOVING TO NEXT URL."); continue
-        except Exception as e:
-            print(f"Critical error in scheduled job: {e}"); quit_driver()
-
+        except Exception as e: print(f"Critical error in scheduled job: {e}"); quit_driver()
 async def send_and_update_memory(context, image_url, source_url):
-    """A helper to send and update memory outside the main lock."""
     success = await send_file_with_retry(context, TELEGRAM_CHAT_ID, image_url, f"New image from: {source_url}")
-    if success:
-        last_known_images[source_url] = image_url
-        sent_urls.append(image_url)
+    if success: last_known_images[source_url] = image_url; sent_urls.append(image_url)
 
 # --- Main function & Cleanup ---
 def main():
     os.makedirs(VOLUME_PATH, exist_ok=True)
-    if os.path.exists(LOCK_FILE): print("!!! Lock file found. Exiting. !!!"); return
+    # --- SELF-HEALING LOCK FILE LOGIC ---
+    if os.path.exists(LOCK_FILE):
+        try:
+            # Check how old the lock file is
+            file_age = time.time() - os.path.getmtime(LOCK_FILE)
+            if file_age > LOCK_FILE_TIMEOUT:
+                print(f"Stale lock file found (older than {LOCK_FILE_TIMEOUT}s). Assuming previous instance crashed. Deleting and starting...")
+                os.remove(LOCK_FILE)
+            else:
+                print("!!! Lock file found. Another instance is likely running. Exiting. !!!")
+                return
+        except Exception as e:
+            print(f"Could not check or remove lock file. Error: {e}. Exiting.")
+            return
+
     with open(LOCK_FILE, 'w') as f: f.write(str(os.getpid()))
     atexit.register(cleanup)
     global sent_wallpapers; sent_wallpapers = load_sent_wallpapers()
