@@ -1,4 +1,4 @@
-# --- FINAL SCRIPT - STALE ELEMENT EXCEPTION FIXED ---
+# --- FINAL SCRIPT - STABLE & QUIET LOGGING ---
 
 import time
 import json
@@ -97,7 +97,7 @@ async def get_latest_image_from_yandere(url: str):
 async def start(update, context):
     await update.message.reply_text('Hello! I monitor latest images automatically.\n\nUse `/wallpaper zerochan` or `/wallpaper yandere` to get 10 new wallpapers by browsing the gallery.')
 
-# --- MODIFIED: Wallpaper Command to prevent Stale Element error ---
+# --- MODIFIED: Wallpaper Command with Quiet Logging ---
 async def get_wallpaper(update, context):
     source = "zerochan"
     if context.args and context.args[0].lower() in ['yandere', 'yande.re']: source = 'yandere'
@@ -108,8 +108,6 @@ async def get_wallpaper(update, context):
             collected_images, newly_sent_ids, current_page, max_pages_to_check = [], [], 1, 10
             while len(collected_images) < 10 and current_page <= max_pages_to_check:
                 print(f"--- Searching page {current_page} of {source} ---")
-                
-                # --- NEW STABLE LOGIC: Step 1 - Collect URLs first ---
                 page_candidates = []
                 if source == 'zerochan':
                     driver.get(f"{ZEROCHAN_WALLPAPER_URL}?p={current_page}"); wait.until(EC.presence_of_element_located((By.ID, 'thumbs2')))
@@ -117,18 +115,16 @@ async def get_wallpaper(update, context):
                     for item in list_items:
                         page_url = item.find_element(By.TAG_NAME, 'a').get_attribute('href'); image_id = "z_" + page_url.split('/')[-1]
                         page_candidates.append({'id': image_id, 'url': page_url})
-                else: # yandere
+                else:
                     driver.get(f"{YANDERE_WALLPAPER_URL}&page={current_page}"); wait.until(EC.presence_of_element_located((By.ID, 'post-list-posts')))
                     gallery = driver.find_element(By.ID, 'post-list-posts'); list_items = gallery.find_elements(By.TAG_NAME, 'li')
                     for item in list_items:
                         page_url = item.find_element(By.CLASS_NAME, 'thumb').get_attribute('href'); image_id = "y_" + page_url.split('/')[-1]
                         page_candidates.append({'id': image_id, 'url': page_url})
-                
                 if not page_candidates: print("No more images found. Stopping search."); break
 
                 new_found_on_page = 0; skipped_on_page = 0
                 
-                # --- NEW STABLE LOGIC: Step 2 - Process the collected URLs ---
                 for candidate in page_candidates:
                     if len(collected_images) >= 10: break
                     image_id, page_url = candidate['id'], candidate['url']
@@ -137,7 +133,7 @@ async def get_wallpaper(update, context):
                         continue
                     try:
                         new_found_on_page += 1
-                        print(f"Found new image: {image_id}. Processing...")
+                        # This log is now removed: print(f"Found new image: {image_id}. Processing...")
                         driver.get(page_url); full_image_url = None
                         if source == 'zerochan': full_image_url = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "a.preview"))).get_attribute('href')
                         else: full_image_url = wait.until(EC.visibility_of_element_located((By.ID, 'highres'))).get_attribute('href')
@@ -149,13 +145,13 @@ async def get_wallpaper(update, context):
                 print(f"Page {current_page} Summary: Found {new_found_on_page} new, Skipped {skipped_on_page} duplicates.")
                 current_page += 1
 
-            # --- Sending logic (unchanged) ---
             if collected_images:
                 send_success=False
                 for attempt in range(MAX_RETRIES):
                     try: await context.bot.send_media_group(chat_id=update.effective_chat.id,media=collected_images); send_success=True; break
                     except TelegramError as e: print(f"Album send attempt {attempt + 1} failed: {e}"); await asyncio.sleep(RETRY_DELAY)
                 if send_success: await update.message.reply_text(f"Here are {len(collected_images)} new wallpapers from {source}!"); sent_wallpapers.update(newly_sent_ids)
+            
             if newly_sent_ids or len(collected_images) > 0: save_sent_wallpapers(sent_wallpapers)
             if len(collected_images) == 0: await update.message.reply_text("I browsed the first few pages but couldn't find any new wallpapers.")
         except Exception as e:
