@@ -1,3 +1,5 @@
+cloudscraper
 python-telegram-bot[job-queue]
 selenium
 requests
+beautifulsoup4
