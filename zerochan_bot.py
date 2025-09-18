@@ -38,14 +38,21 @@ scraper_lock = asyncio.Lock() # The "key" for our browser
 
 # --- Browser Management (Unchanged) ---
 def get_driver():
+    """Gets the existing browser instance or creates a new one."""
     global driver_instance
     if driver_instance is None:
         print("Starting new browser instance...")
         chrome_options = webdriver.ChromeOptions()
+        # ... (all the chrome_options.add_argument lines are the same)
         chrome_options.add_argument("--headless"); chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage"); chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080"); chrome_options.add_argument("user-agent=...")
-        service = Service(); driver_instance = webdriver.Chrome(service=service, options=chrome_options)
+        
+        # --- CHANGE THIS LINE ---
+        # Explicitly provide the path to the chromedriver executable
+        service = Service(executable_path="/usr/local/bin/chromedriver-linux64/chromedriver")
+        
+        driver_instance = webdriver.Chrome(service=service, options=chrome_options)
     return driver_instance
 def quit_driver():
     global driver_instance
