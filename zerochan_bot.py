@@ -1,4 +1,4 @@
-# --- FINAL SCRIPT - STABLE SEQUENTIAL DISCOVERY (ONE IMAGE PER RUN) ---
+# --- FINAL SCRIPT - STABLE SEQUENTIAL DISCOVERY (ONE IMAGE PER MINUTE) ---
 
 import time
 import json
@@ -19,7 +19,7 @@ from telegram.error import TelegramError
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-JOB_INTERVAL = 300 # 5 minutes
+JOB_INTERVAL = 60 # 60 seconds = 1 minute
 MAX_RETRIES = 2; RETRY_DELAY = 10; TELEGRAM_PHOTO_LIMIT = 10485760
 
 # --- URL Sources for Wallpapers ---
@@ -44,7 +44,7 @@ def create_driver():
 def load_sent_images():
     try:
         with open(SENT_IMAGES_FILE, 'r') as f: return set(json.load(f))
-    except FileNotFoundError: print("Memory file not found."); return set()
+    except FileNotFoundError: print("Memory file not found. Starting fresh."); return set()
 
 def save_sent_images(sent_set):
     os.makedirs(VOLUME_PATH, exist_ok=True)
@@ -156,8 +156,9 @@ def main():
     os.makedirs(VOLUME_PATH, exist_ok=True)
     if os.path.exists(LOCK_FILE):
         try:
+            # Stale lock check should be longer than the job interval
             file_age = time.time() - os.path.getmtime(LOCK_FILE)
-            if file_age > JOB_INTERVAL: print(f"Stale lock file found. Deleting..."); os.remove(LOCK_FILE)
+            if file_age > (JOB_INTERVAL + 120): print(f"Stale lock file found. Deleting..."); os.remove(LOCK_FILE)
             else: print("!!! Lock file found. Exiting. !!!"); return
         except Exception as e: print(f"Could not check lock file: {e}. Exiting."); return
     with open(LOCK_FILE, 'w') as f: f.write(str(os.getpid()))
@@ -172,7 +173,7 @@ def main():
     
     # Simple start command for user feedback
     async def start(update, context):
-        await update.message.reply_text('Hello! This bot is running in automated mode and will post a new wallpaper every 5 minutes.')
+        await update.message.reply_text('Hello! This bot is running in automated mode and will post a new wallpaper every minute.')
     application.add_handler(CommandHandler("start", start))
 
     job_queue = application.job_queue
