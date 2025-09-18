@@ -1,4 +1,4 @@
-# --- FINAL SCRIPT - OPTIMIZED & STABILIZED FOR HOSTING ---
+# --- FINAL SCRIPT - MULTI-SITE SUPPORT (ZEROCHAN & YANDE.RE) ---
 
 import time
 import json
@@ -18,46 +18,36 @@ from telegram.error import TelegramError
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-# INCREASED INTERVAL: 5 minutes (300 seconds) is a safe starting point for 3 URLs
-JOB_INTERVAL = 300 
+JOB_INTERVAL = 300 # 5 minutes
 MAX_RETRIES = 2; RETRY_DELAY = 10; TELEGRAM_PHOTO_LIMIT = 10485760
 
 # --- URL Lists ---
 URLS_TO_SCRAPE = [
     "https://www.zerochan.net/",
-    "https://yande.re"
+    "https://www.zerochan.net/Genshin+Impact",
+    "https://yande.re/post" # <-- NEW SITE ADDED
 ]
 MOBILE_WALLPAPER_URL = "https://www.zerochan.net/Mobile+Wallpaper"
+YANDERE_LATEST_URL = "https://yande.re/post"
 
-# --- Bot's Memory, Global Browser, and NEW Lock ---
+# --- Bot's Memory, Global Browser, and Lock ---
 VOLUME_PATH = "/data"; WALLPAPER_MEMORY_FILE = os.path.join(VOLUME_PATH, "sent_wallpapers.json")
 sent_urls = deque(maxlen=50); last_known_images = {}; sent_wallpapers = set()
 driver_instance = None
-scraper_lock = asyncio.Lock() # The "key" for our browser
+scraper_lock = asyncio.Lock()
 
-# --- Browser Management (Unchanged) ---
+# --- Browser Management & Memory Functions (Unchanged) ---
 def get_driver():
-    """Gets the existing browser instance or creates a new one."""
     global driver_instance
     if driver_instance is None:
         print("Starting new browser instance...")
-        chrome_options = webdriver.ChromeOptions()
-        # ... (all the chrome_options.add_argument lines are the same)
-        chrome_options.add_argument("--headless"); chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage"); chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080"); chrome_options.add_argument("user-agent=...")
-        
-        # --- CHANGE THIS LINE ---
-        # Explicitly provide the path to the chromedriver executable
+        chrome_options = webdriver.ChromeOptions(); chrome_options.add_argument("--headless"); chrome_options.add_argument("--no-sandbox"); chrome_options.add_argument("--disable-dev-shm-usage"); chrome_options.add_argument("--disable-gpu"); chrome_options.add_argument("--window-size=1920,1080"); chrome_options.add_argument("user-agent=Mozilla/5.0...")
         service = Service(executable_path="/usr/local/bin/chromedriver-linux64/chromedriver")
-        
         driver_instance = webdriver.Chrome(service=service, options=chrome_options)
     return driver_instance
 def quit_driver():
     global driver_instance
     if driver_instance: print("Closing browser."); driver_instance.quit(); driver_instance = None
-
-# --- Memory & Helper Functions (Unchanged) ---
 def load_sent_wallpapers():
     try:
         with open(WALLPAPER_MEMORY_FILE, 'r') as f: return set(json.load(f))
@@ -65,9 +55,11 @@ def load_sent_wallpapers():
 def save_sent_wallpapers(sent_set):
     os.makedirs(VOLUME_PATH, exist_ok=True)
     with open(WALLPAPER_MEMORY_FILE, 'w') as f: json.dump(list(sent_set), f, indent=4)
+
+# --- Helper Functions (Unchanged) ---
 def download_image_to_memory(image_url: str):
     try:
-        headers = {'User-Agent': '...', 'Referer': 'https://www.zerochan.net/'}
+        headers = {'User-Agent': 'Mozilla/5.0...', 'Referer': image_url} # Use dynamic referer
         response = requests.get(image_url, headers=headers, timeout=30)
         response.raise_for_status(); return response.content
     except requests.RequestException as e: print(f"Download failed: {e}"); return None
@@ -77,17 +69,15 @@ async def send_file_with_retry(context: ContextTypes.DEFAULT_TYPE, chat_id, phot
     file_size = len(image_bytes)
     for attempt in range(MAX_RETRIES):
         try:
-            if file_size < TELEGRAM_PHOTO_LIMIT:
-                await context.bot.send_photo(chat_id=chat_id, photo=image_bytes, caption=caption)
-            else:
-                await context.bot.send_document(chat_id=chat_id, document=image_bytes, filename=photo_url.split('/')[-1], caption=caption)
+            if file_size < TELEGRAM_PHOTO_LIMIT: await context.bot.send_photo(chat_id=chat_id, photo=image_bytes, caption=caption)
+            else: await context.bot.send_document(chat_id=chat_id, document=image_bytes, filename=photo_url.split('/')[-1], caption=caption)
             return True
         except TelegramError as e: print(f"Upload attempt {attempt + 1} failed: {e}"); await asyncio.sleep(RETRY_DELAY)
     return False
 
-# --- Scraping & Command Functions (NOW USE THE LOCK) ---
-async def get_latest_image_from_url(url: str):
-    async with scraper_lock: # Wait to acquire the lock before starting
+# --- RENAMED & UPDATED Scraping Functions ---
+async def get_latest_image_from_zerochan(url: str):
+    async with scraper_lock:
         try:
             driver = get_driver(); driver.get(url); wait = WebDriverWait(driver, 45)
             wait.until(EC.presence_of_element_located((By.ID, 'thumbs2')))
@@ -96,26 +86,51 @@ async def get_latest_image_from_url(url: str):
             image_link_element = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "a.preview")))
             return image_link_element.get_attribute('href')
         except Exception as e:
-            print(f"Scraping failed for {url}. Restarting browser. Error: {e}")
+            print(f"Zerochan scraping failed for {url}. Restarting browser. Error: {e}")
             quit_driver(); return None
 
+# --- NEW SCRAPER FOR YANDE.RE ---
+async def get_latest_image_from_yandere(url: str):
+    async with scraper_lock:
+        try:
+            driver = get_driver(); driver.get(url); wait = WebDriverWait(driver, 45)
+            # Yande.re's post list has a different ID
+            wait.until(EC.presence_of_element_located((By.ID, 'post-list-posts')))
+            post_list = driver.find_element(By.ID, 'post-list-posts')
+            first_post = post_list.find_element(By.TAG_NAME, 'li')
+            # The link to the post's page is inside an <a> with class="thumb"
+            post_page_link = first_post.find_element(By.CLASS_NAME, 'thumb').get_attribute('href')
+            driver.get(post_page_link)
+            # The full image link is in a link with id="highres"
+            image_link_element = wait.until(EC.visibility_of_element_located((By.ID, 'highres')))
+            return image_link_element.get_attribute('href')
+        except Exception as e:
+            print(f"Yande.re scraping failed for {url}. Restarting browser. Error: {e}")
+            quit_driver(); return None
+
+# --- Command Handlers ---
 async def start(update, context):
-    await update.message.reply_text('Hello! I monitor URLs for new images.')
+    await update.message.reply_text(f'Hello! I am monitoring {len(URLS_TO_SCRAPE)} URLs.\n\nCommands:\n/get_image - Latest from Zerochan homepage\n/yandere - Latest from Yande.re\n/wallpaper - 10 new Zerochan wallpapers')
 
 async def get_image(update, context):
-    await update.message.reply_text('Fetching latest image...')
-    image_url = await get_latest_image_from_url(URLS_TO_SCRAPE[0])
-    if image_url: await send_file_with_retry(context, update.effective_chat.id, image_url, "Here is the latest image!")
+    await update.message.reply_text('Fetching latest image from Zerochan...')
+    image_url = await get_latest_image_from_zerochan(URLS_TO_SCRAPE[0]) # Assumes first URL is Zerochan
+    if image_url: await send_file_with_retry(context, update.effective_chat.id, image_url, "Here is the latest image from Zerochan!")
+    else: await update.message.reply_text('Could not retrieve an image.')
+
+# NEW command for Yande.re
+async def get_yandere(update, context):
+    await update.message.reply_text('Fetching latest image from Yande.re...')
+    image_url = await get_latest_image_from_yandere(YANDERE_LATEST_URL)
+    if image_url: await send_file_with_retry(context, update.effective_chat.id, image_url, "Here is the latest image from Yande.re!")
     else: await update.message.reply_text('Could not retrieve an image.')
 
 async def get_wallpaper(update, context):
-    await update.message.reply_text('Searching for up to 10 NEW mobile wallpapers...')
-    async with scraper_lock: # Wait to acquire the lock before starting
+    await update.message.reply_text('Searching for up to 10 NEW mobile wallpapers from Zerochan...')
+    async with scraper_lock:
+        # ... (rest of the wallpaper function is the same)
         try:
-            driver = get_driver(); wait = WebDriverWait(driver, 45)
-            driver.get(MOBILE_WALLPAPER_URL); wait.until(EC.presence_of_element_located((By.ID, 'thumbs2')))
-            # ... (rest of the function is the same, no logic change needed inside)
-            list_items=driver.find_element(By.ID,'thumbs2').find_elements(By.TAG_NAME,'li')[:40];new_wallpaper_pages=[]
+            driver=get_driver();wait=WebDriverWait(driver,45);driver.get(MOBILE_WALLPAPER_URL);wait.until(EC.presence_of_element_located((By.ID,'thumbs2')));list_items=driver.find_element(By.ID,'thumbs2').find_elements(By.TAG_NAME,'li')[:40];new_wallpaper_pages=[]
             for item in list_items:
                 page_url=item.find_element(By.TAG_NAME,'a').get_attribute('href');image_id=page_url.split('/')[-1]
                 if image_id not in sent_wallpapers:new_wallpaper_pages.append(page_url)
@@ -136,15 +151,24 @@ async def get_wallpaper(update, context):
                     if send_success:await update.message.reply_text(f"Here are {len(media_group)} new wallpapers!");sent_wallpapers.update(newly_sent_ids)
                 if newly_sent_ids or len(media_group)>0:save_sent_wallpapers(sent_wallpapers)
             else:await update.message.reply_text("No new wallpapers found.")
-        except Exception as e:
-            print(f"Critical error in get_wallpaper: {e}");await update.message.reply_text("Sorry, an error occurred.")
-            quit_driver()
+        except Exception as e:print(f"Critical error in get_wallpaper: {e}");await update.message.reply_text("Sorry, an error occurred.");quit_driver()
 
+# --- MODIFIED: Automatic Job to handle multiple sites ---
 async def send_scheduled_image(context: ContextTypes.DEFAULT_TYPE):
     print("\n--- Running Scheduled Job ---")
     for url in URLS_TO_SCRAPE:
         try:
-            print(f"\nChecking URL: {url}"); latest_image_url = await get_latest_image_from_url(url)
+            print(f"\nChecking URL: {url}")
+            latest_image_url = None
+            # Decide which scraper to use
+            if "zerochan.net" in url:
+                latest_image_url = await get_latest_image_from_zerochan(url)
+            elif "yande.re" in url:
+                latest_image_url = await get_latest_image_from_yandere(url)
+            else:
+                print(f"Warning: No scraper configured for URL: {url}. Skipping.")
+                continue
+
             if not latest_image_url: raise ValueError("Scraping returned no URL.")
             last_seen_url = last_known_images.get(url)
             if latest_image_url != last_seen_url and latest_image_url not in sent_urls:
@@ -160,7 +184,8 @@ def main():
     print(f"Loaded {len(sent_wallpapers)} wallpaper IDs from memory.")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: print("CRITICAL ERROR: Missing environment variables."); return
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start)); application.add_handler(CommandHandler("get_image", get_image)); application.add_handler(CommandHandler("wallpaper", get_wallpaper))
+    # Add all handlers, including the new /yandere command
+    application.add_handler(CommandHandler("start", start)); application.add_handler(CommandHandler("get_image", get_image)); application.add_handler(CommandHandler("yandere", get_yandere)); application.add_handler(CommandHandler("wallpaper", get_wallpaper))
     job_queue = application.job_queue; job_queue.run_repeating(send_scheduled_image, interval=JOB_INTERVAL, first=5)
     print(f"Scheduled job running every {JOB_INTERVAL} seconds. Bot is running.")
     application.run_polling()
