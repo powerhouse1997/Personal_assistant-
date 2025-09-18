@@ -13,24 +13,24 @@ RUN apt-get update && apt-get install -y \
 RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
 
-# Install Google Chrome
+# Install Google Chrome and clear cache
 RUN apt-get update \
     && apt-get install -y google-chrome-stable \
+    # --- ADD THIS LINE ---
+    && rm -rf /root/.cache/google-chrome \
+    # -------------------
     && rm -rf /var/lib/apt/lists/*
 
-# Find, install, AND MAKE EXECUTABLE the matching version of ChromeDriver
+# Find, install, and make executable the matching version of ChromeDriver
 RUN LATEST_CHROMEDRIVER_VERSION=$(wget -q -O - "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json" | python3 -c "import json, sys; print(json.load(sys.stdin)['channels']['Stable']['version'])") \
     && echo "Downloading ChromeDriver version: $LATEST_CHROMEDRIVER_VERSION" \
     && wget -q --continue -P /tmp "https://storage.googleapis.com/chrome-for-testing-public/$LATEST_CHROMEDRIVER_VERSION/linux64/chromedriver-linux64.zip" \
     && unzip /tmp/chromedriver-linux64.zip -d /usr/local/bin/ \
     && rm /tmp/chromedriver-linux64.zip \
-    # --- ADD THIS LINE ---
     && chmod +x /usr/local/bin/chromedriver-linux64/chromedriver
 
-# Copy local code to the container
+# Copy and install Python dependencies
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code
