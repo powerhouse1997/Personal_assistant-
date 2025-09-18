@@ -1,4 +1,4 @@
-# --- FINAL SCRIPT - STABLE & QUIET LOGGING ---
+# --- FINAL SCRIPT - MEMORY OPTIMIZED & STABILIZED ---
 
 import time
 import json
@@ -34,18 +34,35 @@ sent_urls = deque(maxlen=100); last_known_images = {}; sent_wallpapers = set()
 driver_instance = None
 scraper_lock = asyncio.Lock()
 
-# --- Browser, Memory, and Helper Functions (Unchanged) ---
+# --- MODIFIED: Browser Management with More Memory Options ---
 def get_driver():
     global driver_instance
     if driver_instance is None:
-        print("Starting new browser instance...")
-        chrome_options = webdriver.ChromeOptions(); chrome_options.add_argument("--headless"); chrome_options.add_argument("--no-sandbox"); chrome_options.add_argument("--disable-dev-shm-usage"); chrome_options.add_argument("--disable-gpu"); chrome_options.add_argument("--window-size=1920,1080"); chrome_options.add_argument("user-agent=Mozilla/5.0...")
+        print("Starting new browser instance with memory optimizations...")
+        chrome_options = webdriver.ChromeOptions()
+        chrome_options.add_argument("--headless=new") # Modern headless
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-infobars")
+        chrome_options.add_argument("--disable-popup-blocking")
+        chrome_options.add_argument("--single-process") # Can help in low-memory
+        chrome_options.add_argument("--blink-settings=imagesEnabled=false") # Disable images for gallery pages
+        chrome_options.add_argument("--window-size=1280,1024") # Smaller window
         service = Service(executable_path="/usr/local/bin/chromedriver-linux64/chromedriver")
         driver_instance = webdriver.Chrome(service=service, options=chrome_options)
     return driver_instance
+
 def quit_driver():
     global driver_instance
-    if driver_instance: print("Closing browser."); driver_instance.quit(); driver_instance = None
+    if driver_instance:
+        print("Closing browser and releasing memory.")
+        driver_instance.quit()
+        driver_instance = None
+
+# --- Memory & Helper Functions (Unchanged) ---
+# ... (All these functions are exactly the same as the previous version) ...
 def load_sent_wallpapers():
     try:
         with open(WALLPAPER_MEMORY_FILE, 'r') as f: return set(json.load(f))
@@ -71,7 +88,7 @@ async def send_file_with_retry(context: ContextTypes.DEFAULT_TYPE, chat_id, phot
         except TelegramError as e: print(f"Upload attempt {attempt + 1} failed: {e}"); await asyncio.sleep(RETRY_DELAY)
     return False
 
-# --- Scraping Functions for Scheduled Job (Unchanged) ---
+# --- Scraping Functions (Unchanged) ---
 async def get_latest_image_from_zerochan(url: str):
     async with scraper_lock:
         try:
@@ -93,11 +110,10 @@ async def get_latest_image_from_yandere(url: str):
             return image_link_element.get_attribute('href')
         except Exception as e: print(f"Yande.re scraping failed: {e}"); quit_driver(); return None
 
-# --- Command Handlers ---
+# --- Command Handlers (with cool-down) ---
 async def start(update, context):
     await update.message.reply_text('Hello! I monitor latest images automatically.\n\nUse `/wallpaper zerochan` or `/wallpaper yandere` to get 10 new wallpapers by browsing the gallery.')
 
-# --- MODIFIED: Wallpaper Command with Quiet Logging ---
 async def get_wallpaper(update, context):
     source = "zerochan"
     if context.args and context.args[0].lower() in ['yandere', 'yande.re']: source = 'yandere'
@@ -107,72 +123,56 @@ async def get_wallpaper(update, context):
             driver = get_driver(); wait = WebDriverWait(driver, 45)
             collected_images, newly_sent_ids, current_page, max_pages_to_check = [], [], 1, 10
             while len(collected_images) < 10 and current_page <= max_pages_to_check:
-                print(f"--- Searching page {current_page} of {source} ---")
-                page_candidates = []
-                if source == 'zerochan':
-                    driver.get(f"{ZEROCHAN_WALLPAPER_URL}?p={current_page}"); wait.until(EC.presence_of_element_located((By.ID, 'thumbs2')))
-                    gallery = driver.find_element(By.ID, 'thumbs2'); list_items = gallery.find_elements(By.TAG_NAME, 'li')
-                    for item in list_items:
-                        page_url = item.find_element(By.TAG_NAME, 'a').get_attribute('href'); image_id = "z_" + page_url.split('/')[-1]
-                        page_candidates.append({'id': image_id, 'url': page_url})
-                else:
-                    driver.get(f"{YANDERE_WALLPAPER_URL}&page={current_page}"); wait.until(EC.presence_of_element_located((By.ID, 'post-list-posts')))
-                    gallery = driver.find_element(By.ID, 'post-list-posts'); list_items = gallery.find_elements(By.TAG_NAME, 'li')
-                    for item in list_items:
-                        page_url = item.find_element(By.CLASS_NAME, 'thumb').get_attribute('href'); image_id = "y_" + page_url.split('/')[-1]
-                        page_candidates.append({'id': image_id, 'url': page_url})
-                if not page_candidates: print("No more images found. Stopping search."); break
-
-                new_found_on_page = 0; skipped_on_page = 0
-                
+                # ... (rest of the internal logic is the same)
+                page_candidates=[];print(f"--- Searching page {current_page} of {source} ---")
+                if source=='zerochan':driver.get(f"{ZEROCHAN_WALLPAPER_URL}?p={current_page}");wait.until(EC.presence_of_element_located((By.ID,'thumbs2')));gallery=driver.find_element(By.ID,'thumbs2');list_items=gallery.find_elements(By.TAG_NAME,'li')
+                else:driver.get(f"{YANDERE_WALLPAPER_URL}&page={current_page}");wait.until(EC.presence_of_element_located((By.ID,'post-list-posts')));gallery=driver.find_element(By.ID,'post-list-posts');list_items=gallery.find_elements(By.TAG_NAME,'li')
+                for item in list_items:
+                    if source=='zerochan':page_url=item.find_element(By.TAG_NAME,'a').get_attribute('href');image_id="z_"+page_url.split('/')[-1]
+                    else:page_url=item.find_element(By.CLASS_NAME,'thumb').get_attribute('href');image_id="y_"+page_url.split('/')[-1]
+                    page_candidates.append({'id':image_id,'url':page_url})
+                if not page_candidates:print("No more images found.");break
+                new_found_on_page=0;skipped_on_page=0
                 for candidate in page_candidates:
-                    if len(collected_images) >= 10: break
-                    image_id, page_url = candidate['id'], candidate['url']
-                    if image_id in sent_wallpapers:
-                        skipped_on_page += 1
-                        continue
+                    if len(collected_images)>=10:break
+                    image_id,page_url=candidate['id'],candidate['url']
+                    if image_id in sent_wallpapers:skipped_on_page+=1;continue
                     try:
-                        new_found_on_page += 1
-                        # This log is now removed: print(f"Found new image: {image_id}. Processing...")
-                        driver.get(page_url); full_image_url = None
-                        if source == 'zerochan': full_image_url = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "a.preview"))).get_attribute('href')
-                        else: full_image_url = wait.until(EC.visibility_of_element_located((By.ID, 'highres'))).get_attribute('href')
-                        image_bytes = download_image_to_memory(full_image_url)
-                        if image_bytes and len(image_bytes) < TELEGRAM_PHOTO_LIMIT: collected_images.append(InputMediaPhoto(media=image_bytes)); newly_sent_ids.append(image_id)
-                        elif image_bytes: await send_file_with_retry(context, update.effective_chat.id, full_image_url, "This wallpaper was too large for an album."); sent_wallpapers.add(image_id)
-                    except Exception as e: print(f"Could not process item {image_id}. Skipping. Error: {e}")
-                
+                        new_found_on_page+=1;driver.get(page_url);full_image_url=None
+                        if source=='zerochan':full_image_url=wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR,"a.preview"))).get_attribute('href')
+                        else:full_image_url=wait.until(EC.visibility_of_element_located((By.ID,'highres'))).get_attribute('href')
+                        image_bytes=download_image_to_memory(full_image_url)
+                        if image_bytes and len(image_bytes)<TELEGRAM_PHOTO_LIMIT:collected_images.append(InputMediaPhoto(media=image_bytes));newly_sent_ids.append(image_id)
+                        elif image_bytes:await send_file_with_retry(context,update.effective_chat.id,full_image_url,"This wallpaper was too large for an album.");sent_wallpapers.add(image_id)
+                    except Exception as e:print(f"Could not process item {image_id}. Skipping. Error: {e}")
                 print(f"Page {current_page} Summary: Found {new_found_on_page} new, Skipped {skipped_on_page} duplicates.")
-                current_page += 1
-
+                current_page+=1;time.sleep(2) # <-- ADDED COOL-DOWN
+            # ... (sending logic is the same)
             if collected_images:
                 send_success=False
                 for attempt in range(MAX_RETRIES):
-                    try: await context.bot.send_media_group(chat_id=update.effective_chat.id,media=collected_images); send_success=True; break
-                    except TelegramError as e: print(f"Album send attempt {attempt + 1} failed: {e}"); await asyncio.sleep(RETRY_DELAY)
-                if send_success: await update.message.reply_text(f"Here are {len(collected_images)} new wallpapers from {source}!"); sent_wallpapers.update(newly_sent_ids)
-            
-            if newly_sent_ids or len(collected_images) > 0: save_sent_wallpapers(sent_wallpapers)
-            if len(collected_images) == 0: await update.message.reply_text("I browsed the first few pages but couldn't find any new wallpapers.")
+                    try:await context.bot.send_media_group(chat_id=update.effective_chat.id,media=collected_images);send_success=True;break
+                    except TelegramError as e:print(f"Album send attempt {attempt + 1} failed: {e}");await asyncio.sleep(RETRY_DELAY)
+                if send_success:await update.message.reply_text(f"Here are {len(collected_images)} new wallpapers from {source}!");sent_wallpapers.update(newly_sent_ids)
+            if newly_sent_ids or len(collected_images) > 0:save_sent_wallpapers(sent_wallpapers)
+            if len(collected_images) == 0:await update.message.reply_text("I browsed the first few pages but couldn't find any new wallpapers.")
         except Exception as e:
-            print(f"Critical error in get_wallpaper: {e}"); await update.message.reply_text("Sorry, an error occurred."); quit_driver()
+            print(f"Critical error in get_wallpaper: {e}");await update.message.reply_text("Sorry, an error occurred.");quit_driver()
 
 # --- Automatic Job & Main Function (Unchanged) ---
 async def send_scheduled_image(context: ContextTypes.DEFAULT_TYPE):
     print("\n--- Running Scheduled Job ---")
     for url in URLS_TO_SCRAPE:
         try:
-            print(f"\nChecking URL: {url}"); latest_image_url = None
-            if "zerochan.net" in url: latest_image_url = await get_latest_image_from_zerochan(url)
-            elif "yande.re" in url: latest_image_url = await get_latest_image_from_yandere(url)
-            else: print(f"Warning: No scraper for {url}."); continue
-            if not latest_image_url: raise ValueError("Scraping returned no URL.")
+            print(f"\nChecking URL: {url}"); latest_image_url = await get_latest_image_from_zerochan(url) if "zerochan.net" in url else await get_latest_image_from_yandere(url) if "yande.re" in url else None
+            if not latest_image_url: raise ValueError("Scraping returned no URL or no scraper configured.")
             last_seen_url = last_known_images.get(url)
             if latest_image_url != last_seen_url and latest_image_url not in sent_urls:
                 print(f"NEW IMAGE FOUND on {url}!")
                 success = await send_file_with_retry(context, TELEGRAM_CHAT_ID, latest_image_url, f"New image from: {url}")
                 if success: last_known_images[url] = latest_image_url; sent_urls.append(latest_image_url)
             else: print("No new image found.")
+            time.sleep(3) # <-- ADDED COOL-DOWN
         except Exception as e: print(f"Job failed for URL: {url}. Reason: {e}. MOVING TO NEXT URL."); continue
 def main():
     os.makedirs(VOLUME_PATH, exist_ok=True)
