@@ -1,25 +1,20 @@
-# --- FINAL SCRIPT - FULLY AUTOMATED, ONE RANDOM IMAGE EVERY 5 MINUTES ---
+# --- FINAL SCRIPT - ULTRA-LIGHTWEIGHT MODE (NO SELENIUM) ---
 
 import time
 import json
 import asyncio
-import requests
+import cloudscraper # Using cloudscraper to bypass anti-bot protection
+from bs4 import BeautifulSoup # The HTML parser
 import os
 import atexit
 import random
-from collections import deque
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-JOB_INTERVAL = 300 # 300 seconds = 5 minutes
+JOB_INTERVAL = 300 # 5 minutes
 MAX_RETRIES = 2; RETRY_DELAY = 10; TELEGRAM_PHOTO_LIMIT = 10485760
 
 # --- URL Sources for Random Images ---
@@ -33,32 +28,25 @@ VOLUME_PATH = "/data"; SENT_IMAGES_FILE = os.path.join(VOLUME_PATH, "sent_images
 LOCK_FILE = os.path.join(VOLUME_PATH, "bot.lock")
 sent_image_ids = set()
 
-# --- Browser, Memory, and Helper Functions ---
-def create_driver():
-    """Creates a new, single-use browser instance."""
-    print("Starting new browser instance for a single task...")
-    chrome_options = webdriver.ChromeOptions(); chrome_options.add_argument("--headless=new"); chrome_options.add_argument("--no-sandbox"); chrome_options.add_argument("--disable-dev-shm-usage"); chrome_options.add_argument("--disable-gpu"); chrome_options.add_argument("--single-process"); chrome_options.add_argument("--blink-settings=imagesEnabled=false"); chrome_options.add_argument("--window-size=1280,1024")
-    service = Service(executable_path="/usr/local/bin/chromedriver-linux64/chromedriver")
-    return webdriver.Chrome(service=service, options=chrome_options)
-
+# --- Memory & Helper Functions (requests instead of Selenium) ---
 def load_sent_images():
     try:
         with open(SENT_IMAGES_FILE, 'r') as f: return set(json.load(f))
-    except FileNotFoundError: print("Memory file not found. Starting fresh."); return set()
+    except FileNotFoundError: print("Memory file not found."); return set()
 
 def save_sent_images(sent_set):
     os.makedirs(VOLUME_PATH, exist_ok=True)
     with open(SENT_IMAGES_FILE, 'w') as f: json.dump(list(sent_set), f, indent=4)
 
-def download_image_to_memory(image_url: str):
+def download_image_to_memory(scraper, image_url: str):
     try:
         headers = {'User-Agent': 'Mozilla/5.0...', 'Referer': image_url}
-        response = requests.get(image_url, headers=headers, timeout=45)
+        response = scraper.get(image_url, headers=headers, timeout=45)
         response.raise_for_status(); return response.content
-    except requests.RequestException as e: print(f"Download failed: {e}"); return None
+    except Exception as e: print(f"Download failed: {e}"); return None
 
-async def send_file_with_retry(context: ContextTypes.DEFAULT_TYPE, chat_id, photo_url, caption):
-    image_bytes = download_image_to_memory(photo_url)
+async def send_file_with_retry(scraper, context: ContextTypes.DEFAULT_TYPE, chat_id, photo_url, caption):
+    image_bytes = download_image_to_memory(scraper, photo_url)
     if not image_bytes: return False
     file_size = len(image_bytes)
     for attempt in range(MAX_RETRIES):
@@ -69,39 +57,41 @@ async def send_file_with_retry(context: ContextTypes.DEFAULT_TYPE, chat_id, phot
         except TelegramError as e: print(f"Upload attempt {attempt + 1} failed: {e}"); await asyncio.sleep(RETRY_DELAY)
     return False
 
-# --- Core Scraping Logic ---
-def get_random_image(source_name, random_url):
-    driver = None
+# --- Core Scraping Logic (NO SELENIUM) ---
+def get_random_image(scraper, source_name, random_url):
     try:
-        driver = create_driver()
-        wait = WebDriverWait(driver, 45)
-        
         # Try a few times to get a unique image from this source
-        for _ in range(5): # Try up to 5 times
-            print(f"Fetching random image from {source_name}...")
-            driver.get(random_url)
+        for _ in range(5):
+            print(f"Fetching random page from {source_name}...")
+            # We need to allow redirects to find the final page URL
+            response = scraper.get(random_url, allow_redirects=True, timeout=30)
+            response.raise_for_status()
+            
+            final_url = response.url
+            soup = BeautifulSoup(response.text, "html.parser")
             
             full_image_url, image_id = None, None
             
             if source_name == 'zerochan':
-                wait.until(lambda d: "/random" not in d.current_url and d.current_url != ZEROCHAN_RANDOM_URL)
-                current_url = driver.current_url
-                image_id = "z_" + current_url.split('/')[-1].split('?')[0]
+                image_id = "z_" + final_url.split('/')[-1].split('?')[0]
                 if image_id not in sent_image_ids:
-                    full_image_url = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "a.preview"))).get_attribute('href')
+                    # Find the link with class="preview"
+                    link_element = soup.select_one("a.preview")
+                    if link_element: full_image_url = link_element.get('href')
             
             elif source_name == 'yandere':
-                wait.until(lambda d: "/random" not in d.current_url and "yande.re/post/show" in d.current_url)
-                current_url = driver.current_url
-                image_id = "y_" + current_url.split('/')[-1]
+                image_id = "y_" + final_url.split('/')[-1]
                 if image_id not in sent_image_ids:
-                    full_image_url = wait.until(EC.visibility_of_element_located((By.ID, 'highres'))).get_attribute('href')
-            
+                    # Find the link with id="highres"
+                    link_element = soup.select_one("a#highres")
+                    if link_element: full_image_url = link_element.get('href')
+
             if full_image_url:
                 print(f"Found new unique image: {image_id}")
                 return {'id': image_id, 'url': full_image_url}
             else:
-                print(f"Found a duplicate ({image_id}). Retrying...")
+                print(f"Found a duplicate ({image_id}) or failed to parse. Retrying...")
+                time.sleep(1)
 
         print("Failed to find a unique image after several attempts.")
         return None
@@ -109,27 +99,20 @@ def get_random_image(source_name, random_url):
     except Exception as e:
         print(f"Scraping failed for {source_name}. Error: {e}")
         return None
-    finally:
-        if driver: driver.quit()
 
 # --- Automatic Job ---
 async def send_scheduled_image(context: ContextTypes.DEFAULT_TYPE):
     print("\n--- Running Scheduled Job ---")
-    
-    # Pick a random source to check
+    scraper = cloudscraper.create_scraper() # Create one scraper for the whole job
     source_name, random_url = random.choice(list(RANDOM_SOURCES.items()))
     print(f"Selected source for this run: {source_name}")
     
-    image_data = get_random_image(source_name, random_url)
+    image_data = get_random_image(scraper, source_name, random_url)
     
     if image_data:
-        image_id = image_data['id']
-        full_image_url = image_data['url']
-        
+        image_id, full_image_url = image_data['id'], image_data['url']
         caption = f"A random image from {source_name.capitalize()}"
-        
-        success = await send_file_with_retry(context, TELEGRAM_CHAT_ID, full_image_url, caption)
-        
+        success = await send_file_with_retry(scraper, context, TELEGRAM_CHAT_ID, full_image_url, caption)
         if success:
             print(f"Successfully sent {image_id}. Updating memory.")
             sent_image_ids.add(image_id)
@@ -150,16 +133,14 @@ def main():
     atexit.register(cleanup)
     
     global sent_image_ids; sent_image_ids = load_sent_images()
-    print(f"Loaded {len(sent_image_ids)} previously sent image IDs from memory.")
-    
+    print(f"Loaded {len(sent_image_ids)} image IDs from memory.")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: print("CRITICAL ERROR: Missing environment variables."); return
     
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
     job_queue = application.job_queue
     job_queue.run_repeating(send_scheduled_image, interval=JOB_INTERVAL, first=5)
     
-    print(f"Scheduled job running every {JOB_INTERVAL} seconds. Bot is running in automated mode.")
+    print(f"Scheduled job running every {JOB_INTERVAL} seconds. Bot is running in lightweight mode.")
     application.run_polling()
 
 def cleanup():
